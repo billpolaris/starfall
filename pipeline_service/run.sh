@@ -6,8 +6,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${CONFIG_PATH:-/workspace/configuration.yaml}"
 export CONFIG_FILE
 
+# Raise the open-file limit: the service runs hundreds of threads + Chromium sidecars; a 1024 soft limit
+# breaks the validator ("Too many open files") and resets /status connections under load.
+ulimit -n "$(ulimit -Hn)" 2>/dev/null || ulimit -n 65536 2>/dev/null || true
 
-# GPU preflight benchmark
+
+# Thread pools: the GLM vLLM's CPU-side image preprocessing spawns nproc-sized OpenMP pools; on a small-quota
+# host (10 CPUs seen on RunPod) that oversubscription made the judge's cold path 1.9x slower, while OMP=1 costs
+# nothing on 20-40 CPU quotas. Inherited by every vLLM server spawned from llm/spawn.py.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+
+# Preflight: network, GPU count, per-GPU bf16 TFLOPS + decode-shaped weight-stream GB/s + power limit.
+# Writes /tmp/preflight_metrics.json (picked up by serve.py for the miner-diag header).
 if python -m modules.metrics.preflight; then
     echo "=== PRE-FLIGHT OK ==="
 else
@@ -93,6 +103,7 @@ fi
 
 
 # vLLM spawn
+
 echo "=== STAGE 3: vLLM spawn ==="
 python -m llm.spawn || echo "[run.sh] vllm spawn returned non-zero — FastAPI continues for diagnostics" >&2
 

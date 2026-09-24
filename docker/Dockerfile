@@ -13,8 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/lib64:$LD_LIBRARY_PATH \
     PUPPETEER_CACHE_DIR=/opt/puppeteer-cache \
     NODE_MAJOR=20 \
-    RENDER_POOL_SIZE=32 \
-    VLLM_ENGINE_READY_TIMEOUT_S=2400
+    RENDER_POOL_SIZE=32
 
 # System deps + Node.js 20 + Chromium runtime libs
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

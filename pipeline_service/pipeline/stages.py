@@ -202,7 +202,6 @@ async def _resolve_bracket(
     leaf_tasks: dict[int, asyncio.Task],
     judge,
     sem_judge: asyncio.Semaphore,
-    final_round_robin: bool = False,
 ) -> Candidate | None:
     """Streaming single-elimination over fixed candidate positions.
 
@@ -216,7 +215,9 @@ async def _resolve_bracket(
     async def _judge_duel(left: Candidate, right: Candidate, round_no: int) -> Candidate:
         """Compare two live candidates head-to-head and return the winner."""
         label = f"R{round_no} k{left.k}-vs-k{right.k}"
+        _t_q = time.monotonic()
         async with sem_judge:
+            _t_s = time.monotonic()
             verdict = await judge.compare(
                 task_id=task.stem,
                 match_label=label,
@@ -232,11 +233,12 @@ async def _resolve_bracket(
                 embeddings_b=right.judge_embeddings,
             )
         winner = left if verdict.winner == "A" else right
-        logger.info(f"[BRACKET {label}] {task.stem} -> k{winner.k}")
-        played.append((left, right, winner))
+        _t_e = time.monotonic()
+        logger.info(
+            f"[BRACKET {label}] {task.stem} -> k{winner.k} | "
+            f"[JUDGE_TIMING] queue_wait={_t_s - _t_q:.1f}s compare={_t_e - _t_s:.1f}s in_flight={sem_judge._value}"
+        )
         return winner
-
-    played: list[tuple[Candidate, Candidate, Candidate]] = []
 
     async def _winner_of(lo: int, hi: int) -> Candidate | None:
         """Winner of candidate positions [lo, hi): one leaf, or the better half."""
@@ -257,64 +259,7 @@ async def _resolve_bracket(
 
     if not leaf_tasks:
         return None
-    champion = await _winner_of(0, len(leaf_tasks))
-    if not final_round_robin or not _is_live(champion):
-        return champion
-    try:
-        return await _final_round_robin(task, champion, played, _judge_duel)
-    except Exception as exc:  # never let the extra stage sink a prompt
-        logger.warning(f"[RR] {task.stem} round-robin failed ({type(exc).__name__}: {exc}); keeping bracket winner k{champion.k}")
-        return champion
-
-
-async def _final_round_robin(task, champion, played, judge_duel):
-    """Top-4 round robin: champion, final loser, and both semifinal losers.
-
-    The bracket already played champion-vs-finalist and each finalist-vs-its-semifinal
-    loser, so only the 3 remaining pairings are judged. Most wins over the group wins;
-    ties keep bracket order (champion, finalist, semifinal losers).
-    """
-    def loser(d):
-        return d[1] if d[2] is d[0] else d[0]
-
-    def last_duel_won_by(c, before):
-        for d in reversed(played[:before]):
-            if d[2] is c:
-                return d
-        return None
-
-    final_idx = next((i for i in range(len(played) - 1, -1, -1) if played[i][2] is champion), None)
-    if final_idx is None:
-        return champion
-    final = played[final_idx]
-    finalist = loser(final)
-    group = [champion, finalist]
-    for c in (champion, finalist):
-        d = last_duel_won_by(c, final_idx)
-        if d is not None:
-            group.append(loser(d))
-    group = [c for c in group if _is_live(c)]
-    if len(group) < 3:
-        return champion
-    seen = {frozenset((id(d[0]), id(d[1]))) for d in played}
-    wins = {id(c): 0 for c in group}
-    for d in played:
-        if id(d[0]) in wins and id(d[1]) in wins:
-            wins[id(d[2])] += 1
-    pending = []
-    for i in range(len(group)):
-        for j in range(i + 1, len(group)):
-            if frozenset((id(group[i]), id(group[j]))) not in seen:
-                pending.append((group[i], group[j]))
-    results = await asyncio.gather(*[judge_duel(a, b, 9) for a, b in pending])
-    for w in results:
-        wins[id(w)] += 1
-    best = max(group, key=lambda c: wins[id(c)])  # max keeps first on ties = bracket order
-    logger.info(
-        f"[RR] {task.stem} group={[c.k for c in group]} wins={[wins[id(c)] for c in group]} "
-        f"extra_duels={len(pending)} -> k{best.k} (bracket k{champion.k})"
-    )
-    return best
+    return await _winner_of(0, len(leaf_tasks))
 
 
 def _promote_winner(
@@ -368,10 +313,10 @@ class _CandidateFactory:
         send_image: bool,
         checker_mode: str,
         ensemble_temperature: float,
-        system_prompt: str | None = None,
+        seed_offset: int = 0,
     ) -> None:
-        self.system_prompt = system_prompt
         self.task = task
+        self.seed_offset = seed_offset
         self.coder = coder
         self.judge = judge
         self.embedder = embedder
@@ -433,7 +378,7 @@ class _CandidateFactory:
 
     async def _generate(self, k: int) -> Candidate:
         task = self.task
-        cand = Candidate(k=k, seed=task.seed + k)
+        cand = Candidate(k=k, seed=task.seed + self.seed_offset + k)
         t0 = time.time()
         try:
             async with stage_guard(task, f"coder#k{k}", self.sem_coder, self.status):
@@ -445,7 +390,6 @@ class _CandidateFactory:
                     actor_override=f"coder#k{k}",
                     seed_override=cand.seed,
                     temperature_override=self.ensemble_temperature,
-                    system_prompt_override=self.system_prompt,
                 )
         except StageError as exc:
             cand.drop_reason = f"coder:{type(exc.cause).__name__}"
@@ -527,8 +471,7 @@ async def multigen_first_iter(
     ensemble_size: int,
     ensemble_temperature: float,
     render_from_object: bool = False,
-    router=None,
-    final_round_robin: bool = False,
+    seed_offset: int = 0,
 ) -> None:
     """K-of-N generation + judge bracket. Replaces code_and_check + renderer
     on iteration 0 when `coder.ensemble_size > 1`.
@@ -546,24 +489,6 @@ async def multigen_first_iter(
         f"multimodal={send_image} | osd={'yes' if osd else 'no'}"
     )
 
-    system_prompt: str | None = None
-    if router is not None and task.image_bytes:
-        try:
-            _name, cats = await router.classify(
-                task_id=task.stem, image_bytes=task.image_bytes, image_mime=task.image_mime, seed=task.seed,
-            )
-        except Exception as exc:  # router must never sink a prompt
-            logger.warning(f"[Router] {task.stem} crashed ({type(exc).__name__}: {exc}); full prompt")
-            cats = None
-        if cats is not None:
-            from modules.scene_coder.prompts import CODER_SYSTEM_PROMPT, build_coder_system_prompt
-            system_prompt = build_coder_system_prompt(cats)
-            task.router_categories = sorted(cats)
-            logger.info(
-                f"[Router] {task.stem} categories={sorted(cats)} | prompt chars "
-                f"{len(CODER_SYSTEM_PROMPT)} -> {len(system_prompt)}"
-            )
-
     factory = _CandidateFactory(
         task,
         coder=coder,
@@ -579,7 +504,7 @@ async def multigen_first_iter(
         send_image=send_image,
         checker_mode="with_object" if render_from_object else "sanity",
         ensemble_temperature=ensemble_temperature,
-        system_prompt=system_prompt,
+        seed_offset=seed_offset,
     )
 
     # Launch every coder at once, then embed the reference while they run; each
@@ -598,7 +523,6 @@ async def multigen_first_iter(
     else:
         winner = await _resolve_bracket(
             task=task, leaf_tasks=leaf_tasks, judge=judge, sem_judge=sem_judge,
-            final_round_robin=final_round_robin,
         )
 
     # Every leaf (hence every coder) has resolved by the time the bracket returns.

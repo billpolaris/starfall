@@ -39,7 +39,6 @@ class PipelineTask:
 
     # Fetched image
     image_bytes: bytes | None = None
-    router_categories: list[str] | None = None
     image_mime: str = "image/jpeg"
 
     # Planner → OSD

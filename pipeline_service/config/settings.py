@@ -23,17 +23,45 @@ class APIConfig(BaseModel):
     debug: bool = False
 
 
+class CoderProbeConfig(BaseModel):
+    """Warm-up coder throughput probe (runs once when the models are up, before the warmup task).
+
+    Sends `concurrency` text-only code requests to the coder and measures aggregate output tok/s.
+    The batch wall-clock is coder tokens / tok/s, so this is the one number that predicts whether the
+    audit host fits the 7200 s regeneration budget. With min_tps > 0 and replacements remaining, a slower
+    pod requests REPLACE; min_tps = 0 only logs. Calibrate on a healthy 4xH200 pod first and set min_tps
+    to ~0.8 x the probe value measured there.
+    """
+    enabled: bool = True
+    concurrency: int = 48
+    max_tokens: int = 512
+    min_tps: float = 0.0
+    timeout_s: float = 300.0
+
+
+class PreflightConfig(BaseModel):
+    """Optional host-gating thresholds for modules/metrics/preflight.py (per GPU family defaults apply when None).
+    Read by preflight.py directly from the YAML; declared here so the service accepts the key."""
+    min_tflops: float | None = None
+    min_stream48_gbps: float | None = None
+    min_power_limit_w: float | None = None
+    min_download_mbps: float | None = None
+
+
 class PipelineConfig(BaseModel):
     batch_time_budget: float = 1800.0
     prompt_timeout: float = 120.0
     use_planner: bool = True
-    use_router: bool = False
-    final_round_robin: bool = False
     render_from_object: bool = False
     # When false, disables the whole refinement loop: the critic and every
     # patcher/repair iteration are skipped. Only iteration-0 generation runs
     # (multigen + judge bracket when ensemble_size > 1, else a single coder pass).
     refinement_enabled: bool = True
+    coder_probe: CoderProbeConfig = Field(default_factory=CoderProbeConfig)
+    # Added to the round seed for every candidate (seed = round_seed + seed_offset + k). Give each of our
+    # hotkeys a different offset so two miners never sample the same seed stream: byte-identical outputs
+    # shared across hotkeys are a source-audit ban criterion.
+    seed_offset: int = 0
 
 
 class VllmServeConfig(BaseModel):
@@ -93,6 +121,8 @@ class LLMClientConfig(BaseModel):
 
 class ActorConfig(BaseModel):
     """Per-actor config."""
+    explain: bool = False  # judge only: run the opponent-independent 'explain' GLM call (fills detail['issues']; no effect on the verdict)
+    max_stage: int = 4  # judge only: deepest multi-stage judge stage to run (1-4). 3 skips the S4 side guard (never changed a verdict in 543 logged duels)
 
     workers: int = 1
     queue_size: int = 8
@@ -134,11 +164,6 @@ class ActorsConfig(BaseModel):
         client="openrouter", model="qwen/qwen2.5-vl-72b-instruct",
         max_tokens=1024,
     )
-    router: ActorConfig = ActorConfig(
-        workers=8, queue_size=8,
-        client="openrouter", model="qwen/qwen2.5-vl-72b-instruct",
-        max_tokens=256,
-    )
     checker: ActorConfig = ActorConfig(workers=2, queue_size=8)
     renderer: ActorConfig = ActorConfig(workers=1, queue_size=4)
 
@@ -174,6 +199,7 @@ def _default_llm_clients() -> dict[str, LLMClientConfig]:
 class SettingsConf(BaseSettings):
     api: APIConfig = APIConfig()
     pipeline: PipelineConfig = PipelineConfig()
+    preflight: PreflightConfig = PreflightConfig()
     benchmark: bool = True
     warmup: bool = True
     llm_clients: dict[str, LLMClientConfig] = Field(default_factory=_default_llm_clients)

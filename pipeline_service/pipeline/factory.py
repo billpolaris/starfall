@@ -13,7 +13,6 @@ from modules.js_checker.module import JSCheckerModule
 from modules.judge.agent import JudgeAgent
 from modules.judge.dino import DinoEmbedder
 from modules.renderer.module import RendererModule
-from modules.router.agent import RouterAgent
 from modules.scene_coder.agent import SceneCoderAgent
 from modules.scene_planner.agent import ScenePlannerAgent
 from pipeline.orchestrator import Pipeline
@@ -64,6 +63,7 @@ def build_pipeline(
     if ensemble_size > 1:
         judge: JudgeAgent | None = JudgeAgent(
             clients[actors.judge.client], settings=actors.judge,
+            max_stage=actors.judge.max_stage,
         )
         embedder: DinoEmbedder | None = (
             DinoEmbedder(settings.embedder) if settings.embedder.enabled else None
@@ -72,14 +72,7 @@ def build_pipeline(
         judge = None
         embedder = None
 
-    router: RouterAgent | None = None
-    if ensemble_size > 1 and settings.pipeline.use_router and actors.router.client in clients:
-        router = RouterAgent(clients[actors.router.client], settings=actors.router)
-        logger.info(f"Router: {actors.router.client} | Model: {actors.router.model}")
-
     return Pipeline(
-        router=router,
-        final_round_robin=settings.pipeline.final_round_robin,
         planner=planner,
         coder=coder,
         critic=critic,
@@ -94,6 +87,7 @@ def build_pipeline(
         coder_ensemble_size=ensemble_size,
         coder_ensemble_temperature=actors.coder.ensemble_temperature,
         render_from_object=settings.pipeline.render_from_object,
+        seed_offset=settings.pipeline.seed_offset,
         refinement_enabled=settings.pipeline.refinement_enabled,
         max_iter=policy.max_iter,
         score_threshold=policy.score_threshold,

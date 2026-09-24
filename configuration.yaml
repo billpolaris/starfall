@@ -7,10 +7,22 @@ pipeline:
   batch_time_budget: 14400
   prompt_timeout: 600.0
   use_planner: false
-  use_router: false
-  final_round_robin: true
   render_from_object: true
   refinement_enabled: false
+  seed_offset: 4800002
+  # Warm-up coder throughput probe: 48 text-only code requests x 512 tokens, aggregate output tok/s.
+  # min_tps 0 = measure and log only. CALIBRATE before enabling: run one healthy 4xH200 pod, read
+  # "[Coder probe] ... tok/s" from pipeline.log, set min_tps to ~0.8x that value.
+  coder_probe:
+    enabled: true
+    concurrency: 48
+    max_tokens: 512
+    min_tps: 0
+
+preflight:
+  min_tflops: 30
+  min_stream48_gbps: 0
+  min_power_limit_w: 700
 
 benchmark: true
 warmup: true
@@ -25,11 +37,11 @@ llm_clients:
     base_url: "http://localhost:8001/v1"
     api_key: "local"
     vllm:
-      model: "magicworld7/qwen36-27b-it0-fp8"
-      revision: "45e8433923d9c62af45462e2f4d7083b89c3931b"
-      gpu_ids: "0,1,2"
+      model: "magicworld7/Qwen-3.6-27B-Sable"
+      revision: "f5d3cb4eaa35974654f2f923829e30d50f9f0d2e"
+      gpu_ids: "0,1"
       tensor_parallel_size: 1
-      data_parallel_size: 3
+      data_parallel_size: 2
       vllm_bin: "/opt/vllm-coder-env/bin/vllm"
       gpu_memory_utilization: 0.9
       max_model_len: 81920
@@ -42,22 +54,25 @@ llm_clients:
     vllm:
       model: "zai-org/GLM-4.6V-Flash"
       revision: "411bb4d77144a3f03accbf4b780f5acb8b7cde4e" 
-      gpu_ids: "3"
+      gpu_ids: "2,3"
       tensor_parallel_size: 1
-      gpu_memory_utilization: 0.5
+      data_parallel_size: 2
+      gpu_memory_utilization: 0.9
       max_model_len: 81920
-      max_num_seqs: 196
+      max_num_seqs: 64
+      extra_args: ["--max-num-batched-tokens", "16384"]
       vllm_bin: "/opt/vllm-glm-env/bin/vllm"
       trust_remote_code: true
       reasoning_parser: null
 
 embedder:
+  model_id: "Tooony133/dinov3-vits16-pretrain-lvd1689m"
   revision: "fc6921f7a0b44d5b33ab4482cfed5443db6ccd81"
 
 actors:
   planner:
     client: "coder-instance"
-    model: "magicworld7/qwen36-27b-it0-fp8"
+    model: "magicworld7/Qwen-3.6-27B-Sable"
     workers: 256
     queue_size: 128
     max_tokens: 32768
@@ -75,21 +90,21 @@ actors:
       allow_fallbacks: true
   coder:
     client: "coder-instance"
-    model: "magicworld7/qwen36-27b-it0-fp8"
-    workers: 256
-    queue_size: 128
+    model: "magicworld7/Qwen-3.6-27B-Sable"
+    workers: 96
+    queue_size: 64
     max_tokens: 24576
-    temperature: 0.6
+    temperature: 0.8
     top_p: 0.95
-    top_k: 20
+    top_k: 30
     min_p: 0.0
-    presence_penalty: 0.0
+    presence_penalty: 0.3
     repetition_penalty: 1.0
     seed: 42
     enable_thinking: false
     multimodal: true
-    ensemble_size: 50
-    ensemble_temperature: 0.6
+    ensemble_size: 72
+    ensemble_temperature: 0.8
     providers:
       order: []
       allow_fallbacks: true
@@ -118,23 +133,12 @@ actors:
   judge:
     client: "judge-critic-instance"
     model: "zai-org/GLM-4.6V-Flash"
-    workers: 128
-    queue_size: 64
+    workers: 48
+    queue_size: 48
     max_tokens: 8192
     temperature: 0.0
     seed: 42
-    providers:
-      order: []
-      allow_fallbacks: true
-  router:
-    client: "judge-critic-instance"
-    model: "zai-org/GLM-4.6V-Flash"
-    workers: 16
-    queue_size: 32
-    max_tokens: 256
-    temperature: 0.0
-    seed: 42
-    enable_thinking: false
+    max_stage: 3
     providers:
       order: []
       allow_fallbacks: true
@@ -160,7 +164,7 @@ renderer:
   startup_timeout_s: 60.0
   request_timeout_s: 90.0
   node_binary: "node"
-  img_size: 518
+  img_size: 1024
   grid_gap: 5
   bg_color: null
   lighting: neutral

@@ -44,6 +44,7 @@ class Pipeline:
         coder_ensemble_size: int = 1,
         coder_ensemble_temperature: float = 0.3,
         render_from_object: bool = False,
+        seed_offset: int = 0,
         refinement_enabled: bool = True,
         planner_limit: int = 2,
         coder_limit: int = 2,
@@ -51,15 +52,11 @@ class Pipeline:
         js_checker_limit: int = 2,
         critic_limit: int = 3,
         judge_limit: int = 4,
-        router=None,
-        final_round_robin: bool = False,
     ) -> None:
         self.planner = planner
         self.coder = coder
         self.critic = critic
         self.judge = judge
-        self.router = router
-        self.final_round_robin = final_round_robin
         self.embedder = embedder
         self.js_checker = js_checker
         self.renderer = renderer
@@ -70,6 +67,7 @@ class Pipeline:
         self.coder_ensemble_size = coder_ensemble_size
         self.coder_ensemble_temperature = coder_ensemble_temperature
         self.render_from_object = render_from_object
+        self.seed_offset = seed_offset
         self.refinement_enabled = refinement_enabled
 
         self.max_iter = max_iter
@@ -136,8 +134,7 @@ class Pipeline:
                     ensemble_size=self.coder_ensemble_size,
                     ensemble_temperature=self.coder_ensemble_temperature,
                     render_from_object=self.render_from_object,
-                    router=self.router,
-                    final_round_robin=self.final_round_robin,
+                    seed_offset=self.seed_offset,
                 )
             else:
                 # Next iterations without multigen (base coder, patcher and repair agent)

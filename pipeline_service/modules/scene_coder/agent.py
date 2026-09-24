@@ -21,7 +21,7 @@ from modules.scene_coder.prompts import (
 )
 from modules.scene_planner.schema import OSD
 from config.settings import ActorConfig
-from utils.json_extract import strip_think_block
+
 
 class SceneCoderAgent(BaseAgent):
     """Per-pipeline JS code generator."""
@@ -48,12 +48,11 @@ class SceneCoderAgent(BaseAgent):
         *,
         seed_override: int | None = None,
         temperature_override: float | None = None,
-        system_prompt: str | None = None,
     ) -> SessionAgent:
         return SessionAgent(
             task_id=task_id,
             actor=actor,
-            system_prompt=system_prompt if system_prompt is not None else CODER_SYSTEM_PROMPT,
+            system_prompt=CODER_SYSTEM_PROMPT,
             model=self.model,
             tools=None,
             response_model=None,
@@ -82,7 +81,6 @@ class SceneCoderAgent(BaseAgent):
         actor_override: str | None = None,
         seed_override: int | None = None,
         temperature_override: float | None = None,
-        system_prompt_override: str | None = None,
     ) -> str:
         actor = actor_override or self.actor
         session = self.session_store.get_or_create(
@@ -91,7 +89,6 @@ class SceneCoderAgent(BaseAgent):
                 tid, act,
                 seed_override=seed_override,
                 temperature_override=temperature_override,
-                system_prompt=system_prompt_override,
             ),
         )
         if osd is not None:
@@ -257,7 +254,7 @@ class SceneCoderAgent(BaseAgent):
 
     @staticmethod
     def _normalize_js_output(raw: str) -> str:
-        text = strip_think_block(raw.strip())
+        text = raw.strip()
         if text.startswith("```"):
             lines = text.splitlines()
             if lines:
