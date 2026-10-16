@@ -9,7 +9,7 @@ pipeline:
   use_planner: false
   render_from_object: true
   refinement_enabled: false
-  seed_offset: 5500032
+  seed_offset: 5600032
   coder_probe:
     enabled: true
     concurrency: 48
@@ -126,7 +126,7 @@ actors:
     seed: 42
     enable_thinking: false
     multimodal: true
-    ensemble_size: 40
+    ensemble_size: 45
     ensemble_temperature: 0.8
     providers:
       order: []
